@@ -1,6 +1,6 @@
-interface Env { DISCORD_TOKEN: string, CHANNELS?: [string], DISCORD_CDN_PROXY_BUCKET?: any }
+interface Env { DISCORD_TOKEN: string, CHANNELS?: string[], DISCORD_CDN_PROXY_BUCKET?: any }
 
-interface RefreshedResponse { refreshed_urls?: [{ original?: string, refreshed?: string }] }
+interface RefreshedResponse { refreshed_urls?: { original?: string, refreshed?: string }[] }
 
 interface CachedURL { href: string, expires: Date };
 
@@ -8,23 +8,24 @@ interface CachedURL { href: string, expires: Date };
 // We can extract previously saved results from the global cache object below.
 const cache = new Map<string, CachedURL>();
 
-function parseValidURL(str: string): URL | false {
+function parseValidURL(str: string): URL | null {
 	try { return new URL(str); }
-	catch (_) { return false; }
+	catch (_) { return null; }
 }
 
 function handleOPTIONS(request: Request) {
 	// Adjust as desired: GET, POST, PATCH, DELETE, HEAD, OPTIONS
 	const methods = "GET, OPTIONS";
-	if (request.headers.get("Origin") !== null &&
-		request.headers.get("Access-Control-Request-Method") !== null &&
-		request.headers.get("Access-Control-Request-Headers") !== null) {
+	const origin = request.headers.get("Origin");
+	const requestMethod = request.headers.get("Access-Control-Request-Method");
+	const requestHeaders = request.headers.get("Access-Control-Request-Headers");
+	if (origin && requestMethod && requestHeaders) {
 		// Handle CORS pre-flight request.
 		return new Response(null, {
 			headers: {
-				"Access-Control-Allow-Origin": request.headers.get("Origin") ?? '',
+				"Access-Control-Allow-Origin": origin,
 				"Access-Control-Allow-Methods": methods,
-				"Access-Control-Allow-Headers": request.headers.get("Access-Control-Request-Headers") ?? '',
+				"Access-Control-Allow-Headers": requestHeaders,
 				"Access-Control-Max-Age": "86400",
 			}
 		})
@@ -39,8 +40,10 @@ function handleOPTIONS(request: Request) {
 }
 
 function withCORS(request: Request, response: Response): Response {
-	if (request.headers.get("Origin"))
-		response.headers.set("Access-Control-Allow-Origin", request.headers.get("Origin") ?? '');
+	const origin = request.headers.get("Origin");
+	if (origin) {
+		response.headers.set("Access-Control-Allow-Origin", origin);
+	}
 	return response;
 }
 
@@ -69,7 +72,7 @@ export default {
 			const decoded = decodeURIComponent(request.url);
 			const urlStart = decoded.indexOf('?');
 			const attachment_url = parseValidURL(decoded.substring(urlStart + 1));
-			if (urlStart < 0 || attachment_url === false)
+			if (urlStart < 0 || !attachment_url)
 				return withCORS(request, Response.json(`Provide Discord CDN url after ?. Example: https://your-web-site.com/discord-cdn-proxy?https://cdn.discordapp.com/attachments/channel/message/filename.ext`, { status: 400 }));
 
 			// https://cdn.discordapp.com/attachments/channel/message/filename.ext?ex=expires&is=issued&hm=code
@@ -79,16 +82,17 @@ export default {
 			if (env.CHANNELS && !env.CHANNELS.includes(channel))
 				return withCORS(request, Response.json(`Channel ${channel} is not allowed`, { status: 400 }));
 
-			const params = new URLSearchParams(attachment_url.search);
-			if (params.get('ex') && params.get('is') && params.get('hm')) {
-				const expires = new Date(parseInt(params.get('ex') ?? '', 16) * 1000);
+			const params = attachment_url.searchParams;
+			const exParam = params.get("ex");
+			if (exParam && params.get("is") && params.get("hm")) {
+				const expires = new Date(parseInt(exParam, 16) * 1000);
 				if (expires.getTime() > Date.now())
 					return redirectResponse(request, attachment_url.href, expires, 'original');
 			}
 
 			const file_name = attachment_url.pathname.split('/').pop() ?? '';
 
-			// Check memory cache first
+			// Check in-memory cache first
 			const cached_url = cache.get(file_name);
 
 			if (cached_url && cached_url.expires.getTime() > Date.now())
@@ -121,30 +125,26 @@ export default {
 			const response = await fetch('https://discord.com/api/v9/attachments/refresh-urls', payload);
 
 			// If failed return original Discord API response back
-			if (response.status != 200)
+			if (response.status !== 200)
 				return withCORS(request, response);
 
 			const json = await response.json<RefreshedResponse>();
 
 			if (Array.isArray(json?.refreshed_urls) && json.refreshed_urls[0].refreshed) {
 				const refreshed_url = new URL(json.refreshed_urls[0].refreshed);
-				const params = new URLSearchParams(refreshed_url.search);
 				// Convert from hex and add seconds
-				const expires = new Date(parseInt(params.get('ex') ?? '', 16) * 1000);
+				const expires = new Date(parseInt(refreshed_url.searchParams.get('ex') ?? '', 16) * 1000);
 
 				const cached_url: CachedURL = { href: refreshed_url.href, expires };
 
-				// Save to memory cache
+				// Save to in-memory cache
 				cache.set(file_name, cached_url);
 
 				// Save to r2 bucket (if configured)
 				if (env.DISCORD_CDN_PROXY_BUCKET)
-					ctx.waitUntil(env.DISCORD_CDN_PROXY_BUCKET.put(file_name, JSON.stringify(cached_url),
-						{
-							httpMetadata: {
-								expires: expires
-							}
-						}));
+					ctx.waitUntil(env.DISCORD_CDN_PROXY_BUCKET.put(file_name, JSON.stringify(cached_url), {
+						httpMetadata: { expires }
+					}));
 
 				return redirectResponse(request, refreshed_url.href, expires, 'refreshed');
 			}
@@ -153,7 +153,7 @@ export default {
 			return withCORS(request, Response.json(json, { status: 400 }));
 		} catch (ex: any) {
 			console.error(`Exception`, ex);
-			return withCORS(request, new Response(ex, { status: 500 }));
+			return withCORS(request, new Response(ex.message || ex, { status: 500 }));
 		}
 	}
 };
