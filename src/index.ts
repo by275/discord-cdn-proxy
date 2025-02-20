@@ -90,24 +90,24 @@ export default {
 					return redirectResponse(request, attachment_url.href, expires, 'original');
 			}
 
-			const file_name = attachment_url.pathname.split('/').pop() ?? '';
+			const cacheKey = attachment_url.pathname.split('/').slice(2,4).join(':');
 
 			// Check in-memory cache first
-			const cached_url = cache.get(file_name);
+			const cached_url = cache.get(cacheKey);
 
 			if (cached_url && cached_url.expires.getTime() > Date.now())
 				return redirectResponse(request, cached_url.href, cached_url.expires, 'memory');
 
 			// Check r2 bucket (if configured)
 			if (env.DISCORD_CDN_PROXY_BUCKET) {
-				const object = await env.DISCORD_CDN_PROXY_BUCKET.get(file_name);
+				const object = await env.DISCORD_CDN_PROXY_BUCKET.get(cacheKey);
 
 				if (object) {
 					const cached_url: CachedURL = await object.json();
 					cached_url.expires = new Date(cached_url.expires);
 					if (cached_url.expires.getTime() > Date.now()) {
 						// Save to memory cache
-						cache.set(file_name, cached_url);
+						cache.set(cacheKey, cached_url);
 						return redirectResponse(request, cached_url.href, cached_url.expires, 'bucket');
 					}
 				}
@@ -138,11 +138,11 @@ export default {
 				const cached_url: CachedURL = { href: refreshed_url.href, expires };
 
 				// Save to in-memory cache
-				cache.set(file_name, cached_url);
+				cache.set(cacheKey, cached_url);
 
 				// Save to r2 bucket (if configured)
 				if (env.DISCORD_CDN_PROXY_BUCKET)
-					ctx.waitUntil(env.DISCORD_CDN_PROXY_BUCKET.put(file_name, JSON.stringify(cached_url), {
+					ctx.waitUntil(env.DISCORD_CDN_PROXY_BUCKET.put(cacheKey, JSON.stringify(cached_url), {
 						httpMetadata: { expires }
 					}));
 
