@@ -14,6 +14,8 @@ function handleOPTIONS(request: Request) {
 	const origin = request.headers.get("Origin");
 	const requestMethod = request.headers.get("Access-Control-Request-Method");
 	const requestHeaders = request.headers.get("Access-Control-Request-Headers");
+
+	// Combined condition for pre-flight CORS request
 	if (origin && requestMethod && requestHeaders) {
 		// Handle CORS pre-flight request.
 		return new Response(null, {
@@ -21,20 +23,21 @@ function handleOPTIONS(request: Request) {
 				"Access-Control-Allow-Origin": origin,
 				"Access-Control-Allow-Methods": methods,
 				"Access-Control-Allow-Headers": requestHeaders,
-				"Access-Control-Max-Age": "86400",
-			}
-		})
-	} else {
-		// Handle standard OPTIONS request.
-		return new Response(null, {
-			headers: {
-				"Allow": methods,
+				"Access-Control-Max-Age": "86400", // Cached pre-flight response for 24 hours
 			}
 		})
 	}
+
+	// Handle standard OPTIONS request.
+	return new Response(null, {
+		headers: {
+			"Allow": methods,
+		}
+	});
 }
 
 function withCORS(request: Request, response: Response): Response {
+	// Simplified to set CORS only if origin is present
 	const origin = request.headers.get("Origin");
 	if (origin) {
 		response.headers.set("Access-Control-Allow-Origin", origin);
@@ -48,10 +51,12 @@ function redirectResponse(request: Request, href: string, expires: Date, custom:
 	response.headers.set('Location', href);
 	response.headers.set('Expires', expires.toUTCString());
 	response.headers.set('x-discord-cdn-proxy', custom);
-	return withCORS(request, response);
+
+	return withCORS(request, response); // Use existing function to apply CORS headers
 }
 
 function attachmentUrl(url: URL): string {
+	// Return URL with the replacement for discord CDN
 	return url.href.replace(url.origin, "https://cdn.discordapp.com")
 }
 
@@ -88,24 +93,24 @@ export default {
 					return redirectResponse(request, attachmentUrl(requestUrl), expires, 'original');
 			}
 
+			// Cache key is generated from the channel and attachment ID
 			const cacheKey = pathname.split('/').slice(2,4).join(':');
 
 			// Check in-memory cache first
-			const cached_url = cache.get(cacheKey);
-
-			if (cached_url && cached_url.expires.getTime() > Date.now())
-				return redirectResponse(request, cached_url.href, cached_url.expires, 'memory');
+			const cachedUrl: CachedURL | undefined = cache.get(cacheKey);
+			if (cachedUrl && cachedUrl.expires.getTime() > Date.now())
+				return redirectResponse(request, cachedUrl.href, cachedUrl.expires, 'memory');
 
 			// Check kv namespace (if configured)
 			if (env.KV) {
-				const cached_url: CachedURL = await env.KV.get(cacheKey, { type: 'json' });
+				const cachedUrl: CachedURL | null = await env.KV.get(cacheKey, { type: 'json' });
 
-				if (cached_url) {
-					cached_url.expires = new Date(cached_url.expires);
-					if (cached_url.expires.getTime() > Date.now()) {
+				if (cachedUrl) {
+					cachedUrl.expires = new Date(cachedUrl.expires);
+					if (cachedUrl.expires.getTime() > Date.now()) {
 						// Save to in-memory cache
-						cache.set(cacheKey, cached_url);
-						return redirectResponse(request, cached_url.href, cached_url.expires, 'cached');
+						cache.set(cacheKey, cachedUrl);
+						return redirectResponse(request, cachedUrl.href, cachedUrl.expires, 'cached');
 					}
 				}
 			}
@@ -128,22 +133,22 @@ export default {
 			const json = await response.json<RefreshedResponse>();
 
 			if (Array.isArray(json?.refreshed_urls) && json.refreshed_urls[0].refreshed) {
-				const refreshed_url = new URL(json.refreshed_urls[0].refreshed);
+				const refreshedUrl = new URL(json.refreshed_urls[0].refreshed);
 				// Convert from hex and add seconds
-				const expires = new Date(parseInt(refreshed_url.searchParams.get('ex')!, 16) * 1000);
+				const expires = new Date(parseInt(refreshedUrl.searchParams.get('ex')!, 16) * 1000);
 
-				const cached_url: CachedURL = { href: refreshed_url.href, expires };
+				const cachedUrl: CachedURL = { href: refreshedUrl.href, expires };
 
 				// Save to in-memory cache
-				cache.set(cacheKey, cached_url);
+				cache.set(cacheKey, cachedUrl);
 
 				// Save to kv namespace (if configured)
 				if (env.KV)
-					ctx.waitUntil(env.KV.put(cacheKey, JSON.stringify(cached_url), {
+					ctx.waitUntil(env.KV.put(cacheKey, JSON.stringify(cachedUrl), {
 						expiration: expires.getTime() / 1000,
 					}));
 
-				return redirectResponse(request, refreshed_url.href, expires, 'refreshed');
+				return redirectResponse(request, refreshedUrl.href, expires, 'refreshed');
 			}
 
 			// Return Discord API json which does not have expected data
