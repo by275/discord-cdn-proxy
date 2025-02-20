@@ -1,4 +1,4 @@
-interface Env { DISCORD_TOKEN: string, CHANNELS?: string[], DISCORD_CDN_PROXY_BUCKET?: any }
+interface Env { DISCORD_TOKEN: string, CHANNELS?: string[], KV?: KVNamespace }
 
 interface RefreshedResponse { refreshed_urls?: { original?: string, refreshed?: string }[] }
 
@@ -47,7 +47,7 @@ function withCORS(request: Request, response: Response): Response {
 	return response;
 }
 
-function redirectResponse(request: Request, href: string, expires: Date, custom: 'original' | 'refreshed' | 'memory' | 'bucket') {
+function redirectResponse(request: Request, href: string, expires: Date, custom: 'original' | 'refreshed' | 'memory' | 'cached') {
 	// 302 Found https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/302
 	const response = new Response('', { status: 302, statusText: 'Found' });
 	response.headers.set('Location', href);
@@ -98,17 +98,16 @@ export default {
 			if (cached_url && cached_url.expires.getTime() > Date.now())
 				return redirectResponse(request, cached_url.href, cached_url.expires, 'memory');
 
-			// Check r2 bucket (if configured)
-			if (env.DISCORD_CDN_PROXY_BUCKET) {
-				const object = await env.DISCORD_CDN_PROXY_BUCKET.get(cacheKey);
+			// Check kv namespace (if configured)
+			if (env.KV) {
+				const cached_url: CachedURL = await env.KV.get(cacheKey, { type: 'json' });
 
-				if (object) {
-					const cached_url: CachedURL = await object.json();
+				if (cached_url) {
 					cached_url.expires = new Date(cached_url.expires);
 					if (cached_url.expires.getTime() > Date.now()) {
-						// Save to memory cache
+						// Save to in-memory cache
 						cache.set(cacheKey, cached_url);
-						return redirectResponse(request, cached_url.href, cached_url.expires, 'bucket');
+						return redirectResponse(request, cached_url.href, cached_url.expires, 'cached');
 					}
 				}
 			}
@@ -133,17 +132,17 @@ export default {
 			if (Array.isArray(json?.refreshed_urls) && json.refreshed_urls[0].refreshed) {
 				const refreshed_url = new URL(json.refreshed_urls[0].refreshed);
 				// Convert from hex and add seconds
-				const expires = new Date(parseInt(refreshed_url.searchParams.get('ex') ?? '', 16) * 1000);
+				const expires = new Date(parseInt(refreshed_url.searchParams.get('ex')!, 16) * 1000);
 
 				const cached_url: CachedURL = { href: refreshed_url.href, expires };
 
 				// Save to in-memory cache
 				cache.set(cacheKey, cached_url);
 
-				// Save to r2 bucket (if configured)
-				if (env.DISCORD_CDN_PROXY_BUCKET)
-					ctx.waitUntil(env.DISCORD_CDN_PROXY_BUCKET.put(cacheKey, JSON.stringify(cached_url), {
-						httpMetadata: { expires }
+				// Save to kv namespace (if configured)
+				if (env.KV)
+					ctx.waitUntil(env.KV.put(cacheKey, JSON.stringify(cached_url), {
+						expiration: expires.getTime() / 1000,
 					}));
 
 				return redirectResponse(request, refreshed_url.href, expires, 'refreshed');
