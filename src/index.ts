@@ -8,11 +8,6 @@ interface CachedURL { href: string, expires: Date };
 // We can extract previously saved results from the global cache object below.
 const cache = new Map<string, CachedURL>();
 
-function parseValidURL(str: string): URL | null {
-	try { return new URL(str); }
-	catch (_) { return null; }
-}
-
 function handleOPTIONS(request: Request) {
 	// Adjust as desired: GET, POST, PATCH, DELETE, HEAD, OPTIONS
 	const methods = "GET, OPTIONS";
@@ -56,6 +51,10 @@ function redirectResponse(request: Request, href: string, expires: Date, custom:
 	return withCORS(request, response);
 }
 
+function attachmentUrl(url: URL): string {
+	return url.href.replace(url.origin, "https://cdn.discordapp.com")
+}
+
 export default {
 	async fetch(
 		request: Request,
@@ -69,28 +68,27 @@ export default {
 			if (!env.DISCORD_TOKEN)
 				return withCORS(request, Response.json(`DISCORD_TOKEN is not configured`, { status: 400 }));
 
-			const decoded = decodeURIComponent(request.url);
-			const urlStart = decoded.indexOf('?');
-			const attachment_url = parseValidURL(decoded.substring(urlStart + 1));
-			if (urlStart < 0 || !attachment_url)
-				return withCORS(request, Response.json(`Provide Discord CDN url after ?. Example: https://your-web-site.com/discord-cdn-proxy?https://cdn.discordapp.com/attachments/channel/message/filename.ext`, { status: 400 }));
+			const requestUrl = new URL(request.url);
 
-			// https://cdn.discordapp.com/attachments/channel/message/filename.ext?ex=expires&is=issued&hm=code
-			const channel = attachment_url.pathname.split('/')[2];
+			// Validate pathname format: /attachments/{channelID}/{attachmentID}/filename.ext
+			const pathname = requestUrl.pathname;
+			if (!/^\/attachments\/\d+\/\d+\/.*$/.test(pathname))
+				return withCORS(request, Response.json(`Invalid Path`, { status: 400 }));
 
 			// If CHANNELS defined ensure we that provided channel is allowed
+			const channel = pathname.split('/')[2];
 			if (env.CHANNELS && !env.CHANNELS.includes(channel))
 				return withCORS(request, Response.json(`Channel ${channel} is not allowed`, { status: 400 }));
 
-			const params = attachment_url.searchParams;
+			const params = requestUrl.searchParams;
 			const exParam = params.get("ex");
 			if (exParam && params.get("is") && params.get("hm")) {
 				const expires = new Date(parseInt(exParam, 16) * 1000);
 				if (expires.getTime() > Date.now())
-					return redirectResponse(request, attachment_url.href, expires, 'original');
+					return redirectResponse(request, attachmentUrl(requestUrl), expires, 'original');
 			}
 
-			const cacheKey = attachment_url.pathname.split('/').slice(2,4).join(':');
+			const cacheKey = pathname.split('/').slice(2,4).join(':');
 
 			// Check in-memory cache first
 			const cached_url = cache.get(cacheKey);
@@ -118,7 +116,7 @@ export default {
 					'Authorization': `${env.DISCORD_TOKEN}`,
 					'Content-Type': 'application/json'
 				},
-				body: JSON.stringify({ attachment_urls: [attachment_url.href] })
+				body: JSON.stringify({ attachment_urls: [attachmentUrl(requestUrl)] })
 			};
 
 			const response = await fetch('https://discord.com/api/v9/attachments/refresh-urls', payload);
