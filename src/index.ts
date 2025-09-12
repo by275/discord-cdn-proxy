@@ -46,6 +46,16 @@ function withCORS(request: Request, response: Response): Response {
 }
 
 function redirectResponse(request: Request, href: string, expires: Date, custom: 'original' | 'refreshed' | 'memory' | 'cached') {
+	if (custom !== 'original' && custom !== 'refreshed') {
+		const redirectUrl = new URL(href);
+		const requestParams = new URL(request.url).searchParams;
+		for (const key of ['ex', 'is', 'hm']) {
+			const value = redirectUrl.searchParams.get(key);
+			if (value !== null) requestParams.set(key, value);
+		}
+		redirectUrl.search = requestParams.toString()
+		href = redirectUrl.href;
+	}
 	// 302 Found https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/302
 	const response = new Response('', { status: 302, statusText: 'Found' });
 	response.headers.set('Location', href);
@@ -94,7 +104,7 @@ export default {
 			}
 
 			// Cache key is generated from the channel and attachment ID
-			const cacheKey = pathname.split('/').slice(2,4).join(':');
+			const cacheKey = pathname.split('/').slice(2, 4).join(':');
 
 			// Check in-memory cache first
 			const cachedUrl: CachedURL | undefined = cache.get(cacheKey);
