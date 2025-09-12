@@ -1,6 +1,6 @@
 name = "discord-cdn-proxy"
 main = "src/index.ts"
-compatibility_date = "2023-07-16"
+compatibility_date = "2025-09-12"
 
 # Uncomment below if you want to use specific to your website routing.
 # Make sure to update useapi.net to desired values.
