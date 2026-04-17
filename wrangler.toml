@@ -1,6 +1,6 @@
 name = "discord-cdn-proxy"
 main = "src/index.ts"
-compatibility_date = "2025-09-12"
+compatibility_date = "2026-04-17"
 preview_urls = false
 
 # Uncomment below if you want to use specific to your website routing.
