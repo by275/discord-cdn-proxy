@@ -7,6 +7,6 @@ compatibility_date = "2025-09-12"
 # routes = [ { pattern = "demo.useapi.net/discord-cdn-proxy/*", zone_name = "useapi.net" } ]
 
 # Uncomment below if you want to use kv namespace for caching.
-# [[kv_namespaces]]
-# binding = "KV"
-# id = "4d2eb4bc36fd4facb40f8f3307a14552"
+[[kv_namespaces]]
+binding = "KV"
+id = "4d2eb4bc36fd4facb40f8f3307a14552"
