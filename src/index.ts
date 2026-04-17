@@ -70,6 +70,28 @@ function attachmentUrl(url: URL): string {
 	return url.href.replace(url.origin, "https://cdn.discordapp.com")
 }
 
+function passthroughParams(url: URL): URLSearchParams {
+	const params = new URLSearchParams();
+	for (const [key, value] of url.searchParams) {
+		if (key !== 'ex' && key !== 'is' && key !== 'hm')
+			params.set(key, value);
+	}
+	return params;
+}
+
+function getCacheKey(pathname: string, params: URLSearchParams): string {
+	const base = pathname.split('/').slice(2, 4).join(':');
+	if (params.size === 0)
+		return base;
+
+	const suffix = Array.from(params.entries())
+		.sort(([left], [right]) => left.localeCompare(right))
+		.map(([key, value]) => `${key}=${value}`)
+		.join('&');
+
+	return `${base}:${suffix}`;
+}
+
 export default {
 	async fetch(
 		request: Request,
@@ -103,8 +125,8 @@ export default {
 					return redirectResponse(request, attachmentUrl(requestUrl), expires, 'original');
 			}
 
-			// Cache key is generated from the channel and attachment ID
-			const cacheKey = pathname.split('/').slice(2, 4).join(':');
+			const additionalParams = passthroughParams(requestUrl);
+			const cacheKey = getCacheKey(pathname, additionalParams);
 
 			// Check in-memory cache first
 			const cachedUrl: CachedURL | undefined = cache.get(cacheKey);
@@ -144,6 +166,9 @@ export default {
 
 			if (Array.isArray(json?.refreshed_urls) && json.refreshed_urls[0].refreshed) {
 				const refreshedUrl = new URL(json.refreshed_urls[0].refreshed);
+				for (const [key, value] of additionalParams)
+					refreshedUrl.searchParams.set(key, value);
+
 				// Convert from hex and add seconds
 				const expires = new Date(parseInt(refreshedUrl.searchParams.get('ex')!, 16) * 1000);
 
